@@ -4,8 +4,6 @@
 
 use teensy::*;
 
-define_panic!(empty);
-
 #[no_mangle]
 fn main() {
     let (led, pin) = unsafe { make_pin!(led, 3) };
