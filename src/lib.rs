@@ -184,6 +184,9 @@ pub mod watchdog;
 pub mod sleep;
 pub mod uart;
 
+/// SPI
+pub mod spi;
+
 /// The only function you will need to implements
 extern "Rust" {
     fn init();
