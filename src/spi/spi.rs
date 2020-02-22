@@ -5,6 +5,9 @@ use nb;
 use crate::sim::Sim;
 use crate::port::{Port, PortName};
 use crate::sim::Clock::PortC;
+use crate::sleep;
+use crate::sleep::sleep_ms;
+use core::mem;
 
 #[repr(C, packed)]
 pub struct Spi0 {
@@ -53,22 +56,13 @@ impl Spi0 {
 impl Spi0 {
     // TODO: add cont: bool
     pub fn write(&mut self, b: u32) {
-        let pcs: u32 = 1;
-
-        if pcs == 0 {
-            // `| 0x8...` means "keep the asserted SC"
-            self.pushr.write(
-                b & 0xff | // data (u8)
-                    (pcs << 16) as u32 | // asserted PCS(s)
-                    0x80000000 ); // keep asserted PCS(s)
-            // (how necessary is this?)
-            while self.sr.read().get_bits(12..16) > 3 {}
-        }
-
-        // if pcs != 0
-        // let pcsbits: u32 = (pcs as u32) << (16 as u32);
-        // pushr = (last 8 bits of b) | (pcsbits) | (if cont, 0x80000000, else 0)
-        // wait while (sr[txctr] > 3)
+        // TODO: set PCS
+        self.pushr.update(|pushr| {
+            pushr.set_bits(0..9, b & 0xFF); // 8 bits of data (should this be framesize?)
+            pushr.set_bits(16..22, 1 & 0b111111); // set asserted PCS
+            pushr.set_bit(31, true); // keep asserted PCS
+        });
+        while self.sr.read().get_bits(12..16) > 3 {}
 
         // else
         //  sr[eoqf] = true // end of queue flag
@@ -130,25 +124,22 @@ impl Spi0 {
             });
         }
 
-
         self.master(); // enter master mode
         self.mcr.update(|mcr| {
             mcr.set_bit(14, false); // enable module (MDIS)
             mcr.set_bit(0, false); // start transfers? (HALT)
         });
 
-
         self.ctar0.update(|ctar0| {
             ctar0.set_bits(27..31, 7); // set frame size to 8
         });
 
-
         // setup pins
         unsafe {
-            Port::new(PortName::C).pin(4).with_pin_mode(2); // PCS0
-            Port::new(PortName::C).pin(5).with_pin_mode(2); // SCK
-            Port::new(PortName::C).pin(6).with_pin_mode(2); // SOUT
-            Port::new(PortName::C).pin(7).with_pin_mode(2); // SIN
+            Port::new(PortName::D).pin(0).with_pin_mode(2); // PCS0
+            Port::new(PortName::D).pin(1).with_pin_mode(2); // SCK
+            Port::new(PortName::D).pin(2).with_pin_mode(2); // SOUT
+            Port::new(PortName::D).pin(3).with_pin_mode(2); // SIN
         }
 
         // clear the queue (or is it buffers?)
@@ -160,9 +151,9 @@ impl Spi0 {
     }
 
     pub fn clear(&mut self) {
-        self.mcr.update(|mcr| {mcr.set_bit(11, true);
+        self.mcr.update(|mcr| {
             mcr.set_bit(31, true); // master mode
-            mcr.set_bits(16..21, 0xFF); // set all PCS inactive states to high
+            mcr.set_bits(16..21, 0b11111); // set all PCS inactive states to high
             mcr.set_bit(11, true); // clear tx
             mcr.set_bit(10, true); // clear rx
         });
@@ -193,7 +184,7 @@ impl Spi0 {
         self.ctar0.update(|ctar0| {
             ctar0.set_bits(16..18, 0b00); // prescaler = 2
             ctar0.set_bit(31, false); // don't halve the baud rate
-            ctar0.set_bits(0..4, 0b0010); // scaler = 8
+            ctar0.set_bits(0..4, 0b0011); // scaler = 6
         })
     }
 
@@ -204,13 +195,16 @@ impl FullDuplex<u8> for &mut Spi0 {
     type Error = Error;
 
     fn read(&mut self) -> nb::Result<u8, Self::Error> {
-        unimplemented!()
+        //while (self.sr.read() & (15 << 4)) == 0 {} // while there's nothing to read, wait...
+        let a = self.popr.read();
+        let b = unsafe {mem::transmute::<u32, [u8;4]>(a)};
+        return Ok(b[3]);
     }
 
     fn send(&mut self, word: u8) -> nb::Result<(), Self::Error> {
+        let _ = self.read();
         self.write(word as u32);
-        // return Ok(());
-        unimplemented!()
+        return Ok(());
     }
 }
 
